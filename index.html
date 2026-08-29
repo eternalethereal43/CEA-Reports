@@ -199,7 +199,7 @@ svg.chart .thr{stroke:var(--crit);stroke-dasharray:3 3;stroke-width:1}
   <div class="stage">
     <div class="eyebrow">Central Electricity Authority · Fuel Management Division</div>
     <h2>Daily Coal Stock dashboard</h2>
-    <p>Reports are read from the <code>CEA Reports</code> folder beside this page, named by their report date —
+    <p>Reports are read from the folder this page sits in, named by their report date —
       <code>26-08-2026.xlsx</code>, <code>25-08-2026.xls</code>, and so on. Opening this file from your own disk instead?
       Point it at the folder below. Everything is read on your own machine; nothing is uploaded.</p>
 
@@ -235,7 +235,7 @@ svg.chart .thr{stroke:var(--crit);stroke-dasharray:3 3;stroke-width:1}
     <details style="margin-top:18px">
       <summary style="cursor:pointer;color:var(--muted);font-size:12.5px">Serving the folder from a web server instead</summary>
       <ol style="margin-top:8px">
-        <li>Put this file beside a folder named <code>CEA Reports</code> holding the workbooks.</li>
+        <li>Put this file in the same folder as the workbooks.</li>
         <li>Run <code>python -m http.server 8000</code> there, and open <code>http://localhost:8000/</code>.</li>
         <li>On GitHub Pages the folder is listed through the repository API, so nothing else is needed.
             Running <code>python tools/make_manifest.py</code> writes a <code>manifest.json</code> that removes even that call.</li>
@@ -831,9 +831,9 @@ async function scanFolder(h) {
     if (entry.kind === 'file' && /\.(xlsx|xlsm|xls)$/i.test(name) && !/^~\$/.test(name)) files.push(await entry.getFile());
     else if (entry.kind === 'directory' && !/^[._]/.test(name)) subs.push([name, entry]);
   }
-  // picking the repository root is fine: look one level down as well
+  // if the chosen folder holds no workbooks, look one level down before giving up
   for (const [name, dir] of subs) {
-    if (files.length && !new RegExp('^' + DATA_DIR + '$', 'i').test(name)) continue;
+    if (files.length) break;
     try {
       for await (const [n2, e2] of dir.entries())
         if (e2.kind === 'file' && /\.(xlsx|xlsm|xls)$/i.test(n2) && !/^~\$/.test(n2)) files.push(await e2.getFile());
@@ -865,9 +865,11 @@ async function tryRememberedFolder() {
    Every attempt is recorded so the loader can explain a miss.
    ============================================================ */
 
-/** Folders to look in, relative to this page. '' means beside the page itself. */
-const DATA_DIRS = ['CEA Reports', 'CEA-Reports', 'Reports', 'reports', 'data', ''];
+/** Where to look, relative to this page. '' is the folder holding the page itself;
+    the named folders are checked afterwards in case the reports were tidied away. */
+const DATA_DIRS = ['', 'CEA Reports', 'CEA-Reports', 'Reports', 'reports', 'data'];
 const DATA_DIR = DATA_DIRS[0];
+const dirLabel = d => d || 'this folder';
 const encPath = d => d ? d.split('/').filter(Boolean).map(encodeURIComponent).join('/') + '/' : '';
 const isReport = n => /\.(xlsx|xlsm|xls)$/i.test(n) && !/^~\$/.test(n) && !!dateFromName(n);
 
@@ -975,14 +977,14 @@ async function probeByDate() {
   for (const dir of DATA_DIRS) {
     const quick = await probeDir(dir, 10);
     if (!quick.length) continue;
-    note('name probe in ' + (dir || 'this folder'), 'found reports, reading the full history');
+    note('name probe in ' + dirLabel(dir), 'found reports, reading the full history');
     const all = await probeDir(dir, 400);
     return pack(dir, all.length ? all : quick);
   }
   // nothing recent: look further back where the reports are meant to live
-  for (const dir of [DATA_DIRS[0], '']) {
-    const deep = await probeDir(dir, 60);
-    note('deep name probe in ' + (dir || 'this folder'), deep.length ? `${deep.length} report(s)` : 'nothing');
+  for (const dir of ['', 'CEA Reports']) {
+    const deep = await probeDir(dir, 45);
+    note('deep name probe in ' + dirLabel(dir), deep.length ? `${deep.length} report(s)` : 'nothing');
     if (deep.length) return pack(dir, deep);
   }
   return [];
@@ -995,8 +997,12 @@ async function tryServerScan() {
   if (!items.length) items = await fromGitHubAPI();
   if (!items.length) items = await fromDirectoryIndex();
   // if GitHub itself listed the repository and held no reports, probing cannot help
-  if (!items.length && !APP.githubListed) items = await probeByDate();
-  if (!items.length) { explainMiss(); return false; }
+  if (!items.length && !APP.githubListed) {
+    explainMiss(true);                    // say something now; the probe takes a while
+    items = await probeByDate();
+  }
+  if (!items.length) { explainMiss(false); return false; }
+  $('#diag').classList.add('hide');
 
   const files = [];
   for (const it of items) {
@@ -1008,21 +1014,26 @@ async function tryServerScan() {
     } catch (e) {}
   }
   if (!files.length) { explainMiss(); return false; }
-  const dir = decodeURIComponent(items[0].url.split('/').slice(0, -1).join('/')) || 'this folder';
-  $('#folderName').textContent = dir;
+  $('#folderName').textContent = dirLabel(decodeURIComponent(items[0].url.split('/').slice(0, -1).join('/')));
   await ingestFiles(files);
   return true;
 }
 
 /** tell the reader exactly what was looked for, so a wrong folder name is obvious */
-function explainMiss() {
+function explainMiss(stillLooking) {
   const box = $('#diag');
   if (!box) return;
   box.classList.remove('hide');
+  if (stillLooking) {
+    box.innerHTML = `<b>No reports found yet.</b> Nothing is listed beside this page, so it is now asking
+      for recent dates by name — that takes a few seconds. You don't have to wait: the buttons below open
+      the files from your own machine.`;
+    return;
+  }
   box.innerHTML = `<b>No reports found on this site.</b> The page looked for workbooks named by date
-    (<code>26-08-2026.xlsx</code>) in a folder called <code>CEA Reports</code> beside it, and in the
-    repository listing. Check the folder name and the file names, then reload — or use the buttons below
-    to open the files from your own machine.
+    (<code>26-08-2026.xlsx</code>) in its own folder, in a few likely sub-folders, and in the repository
+    listing. Check that the files sit beside this page and are named by date, then reload — or use the
+    buttons below to open them from your own machine.
     <details style="margin-top:8px"><summary style="cursor:pointer">What it tried</summary>
     <div class="log" style="max-height:190px">${TRIED.map(t => esc(t)).join('<br>')}</div></details>`;
 }

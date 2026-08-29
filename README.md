@@ -1,7 +1,7 @@
 # CEA Daily Coal Stock — dashboard
 
 A single-page dashboard for the Central Electricity Authority's daily coal stock
-reports. Drop the workbooks into **`CEA Reports/`**, push, and the site shows the
+reports. Drop the workbooks into the repository, push, and the site shows the
 all-India position, plant-wise detail, trends over any period and a comparison
 between any two dates.
 
@@ -12,50 +12,42 @@ the workbooks are read on the reader's own machine.
 
 ## Putting it on GitHub
 
-1. Create a repository and copy these files into it, keeping the layout below.
-2. Put your reports in `CEA Reports/`, named by their date: `26-08-2026.xlsx`,
-   `25-08-2026.xls`, and so on. Both CEA exports are read and may be mixed.
+1. Create a repository and copy these files into it.
+2. Put your reports **in the root of the repository, beside `index.html`**, named
+   by their date: `26-08-2026.xlsx`, `25-08-2026.xls`, and so on. Both CEA
+   exports are read and may be mixed.
 3. Push.
 4. In **Settings → Pages**, set *Source* to **Deploy from a branch**, branch
    `main`, folder `/ (root)`. Your dashboard appears at
    `https://<user>.github.io/<repo>/`.
 
-The `.nojekyll` file is there so GitHub Pages publishes the folder as-is.
-
-Adding a report later is just a matter of dropping the file into
-`CEA Reports/` and pushing. The included GitHub Action rebuilds
-`CEA Reports/manifest.json`, which is how the page knows what is in the folder.
-If you would rather not use Actions, run `python tools/make_manifest.py` before
-committing — or delete the manifest entirely and let the page fall back to the
-GitHub contents API, which lists the folder without any manifest at all.
+Adding a report later is just a matter of dropping the file in and pushing. The
+included GitHub Action rebuilds `manifest.json`, which is how the page knows what
+is there. If you would rather not use Actions, run `python tools/make_manifest.py`
+before committing — or delete the manifest entirely and let the page fall back to
+the GitHub contents API, which lists the repository without any manifest at all.
 
 ```
 your-repo/
-├── index.html                        the whole dashboard, one file
-├── CEA Reports/
-│   ├── 26-08-2026.xlsx               your daily reports
-│   ├── 25-08-2026.xls
-│   └── manifest.json                 generated; lists what is in the folder
-├── tools/make_manifest.py            regenerates the manifest
+├── index.html                    the whole dashboard, one file
+├── 26-08-2026.xlsx               your daily reports, in the root
+├── 25-08-2026.xls
+├── manifest.json                 generated; lists what is there
+├── tools/make_manifest.py        regenerates the manifest
 ├── .github/workflows/build-manifest.yml
+├── .nojekyll                     publish the files as they are
 └── README.md
 ```
 
-### Keeping the repository private
-
-GitHub Pages needs a paid plan to serve a private repository. If your data
-shouldn't be public, keep the repository private and open `index.html` straight
-from your own disk instead — see below.
+Reports may also be kept in a sub-folder — `CEA Reports`, `Reports` or `data` are
+all checked, and on GitHub the whole repository listing is read, so any folder
+works. The root is simply what it looks at first.
 
 ### If the site loads but shows no reports
 
-The page says so plainly and lists every location it tried — open
-**What it tried** on the message. The usual causes:
+The page says so plainly and lists every location it tried — open **What it
+tried** on the message. The usual causes:
 
-- **The folder is named something else.** The page also checks `CEA-Reports`,
-  `Reports`, `reports` and `data`, and on GitHub it reads the repository listing,
-  so any folder in the repository works. A typo like `CEA  Reports` (two spaces)
-  will not.
 - **The files are not named by date.** They must be `DD-MM-YYYY.xlsx` or `.xls`.
   A name like `26-08-2026 (1).xlsx` or `DailyCoalReport.xlsx` is skipped.
 - **Pages has not finished publishing.** Check the Actions tab; a push takes a
@@ -64,14 +56,19 @@ The page says so plainly and lists every location it tried — open
   address. Running `python tools/make_manifest.py` and committing the result
   removes that call entirely.
 
+### Keeping the repository private
+
+GitHub Pages needs a paid plan to serve a private repository. If your data
+shouldn't be public, keep the repository private and open `index.html` straight
+from your own disk instead — see below.
+
 ## Running it without GitHub
 
 - **Straight off your disk.** Open `index.html` in Chrome or Edge and point it at
   the folder when asked. The browser remembers the folder, so afterwards it opens
-  directly into the dashboard. Choosing the repository root is fine; it looks
-  inside `CEA Reports/` on its own.
-- **From a local server.** Run `python -m http.server 8000` in the repository and
-  open `http://localhost:8000/`.
+  directly into the dashboard.
+- **From a local server.** Run `python -m http.server 8000` in the folder and open
+  `http://localhost:8000/`.
 - Firefox and Safari can read the folder but cannot remember it, so you pick it
   each time. Dragging files onto the page works in every browser.
 
@@ -127,5 +124,5 @@ print to PDF to circulate it.
   files load behind it, with progress shown in the top bar.
 - Parsed reports are cached in the browser, so a folder holding a year of files
   is read only once. **Clear cache and start over** forces a re-read.
-- To use a different folder name, change `DATA_DIR` near the top of the script in
-  `index.html` and the path in `tools/make_manifest.py`.
+- To search a different folder, edit `DATA_DIRS` near the top of the script in
+  `index.html`.
