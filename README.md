@@ -43,6 +43,19 @@ Reports may also be kept in a sub-folder — `CEA Reports`, `Reports` or `data` 
 all checked, and on GitHub the whole repository listing is read, so any folder
 works. The root is simply what it looks at first.
 
+### If a newly added report doesn't appear
+
+Press **Check for new reports** in the top bar — it re-reads the folder without a
+page reload. If it is still missing:
+
+- The page merges every source it can see, and also asks directly for the last
+  twelve dates, so a `manifest.json` that was not regenerated cannot hide a
+  recent file. An older report added long after the fact does need the manifest
+  rebuilt: run `python tools/make_manifest.py`, or let the Action do it.
+- GitHub Pages takes a minute or two to publish, and its CDN may hold the old
+  copy briefly. A hard refresh (Ctrl+Shift+R, or Cmd+Shift+R) clears it.
+- Check the file name is exactly `DD-MM-YYYY.xlsx` or `.xls`.
+
 ### If the site loads but shows no reports
 
 The page says so plainly and lists every location it tried — open **What it

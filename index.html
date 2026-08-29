@@ -254,7 +254,7 @@ svg.chart .thr{stroke:var(--crit);stroke-dasharray:3 3;stroke-width:1}
     <div class="chip noprint hide" id="loadChip"></div>
     <span class="mast-spacer"></span>
     <span class="chip noprint">Folder <b id="folderName">—</b></span>
-    <button class="btn ghost hide" id="reloadBtn">Re-scan folder</button>
+    <button class="btn ghost hide" id="reloadBtn" title="Look again for reports, including any added since this page opened">Check for new reports</button>
     <button class="btn ghost" id="briefBtn">Print daily brief</button>
     <button class="btn ghost" id="pickBtn2">Change folder</button>
   </div>
@@ -889,7 +889,7 @@ async function fromManifests() {
   for (const dir of DATA_DIRS) {
     const u = encPath(dir) + 'manifest.json';
     try {
-      const r = await fetch(u, { cache: 'no-store' });
+      const r = await fetch(u + '?t=' + Date.now(), { cache: 'no-store' });
       if (!r.ok) { note(u, r.status); continue; }
       const j = await r.json();
       const raw = Array.isArray(j) ? j : (j.files || []);
@@ -908,7 +908,7 @@ async function fromGitHubAPI() {
   if (!g) return [];
   const base = `https://api.github.com/repos/${g.owner}/${g.repo}/contents/`;
   const get = async path => {
-    const r = await fetch(base + path, { cache: 'no-store', headers: { Accept: 'application/vnd.github+json' } });
+    const r = await fetch(base + path + '?t=' + Date.now(), { cache: 'no-store', headers: { Accept: 'application/vnd.github+json' } });
     if (!r.ok) { note('GitHub API ' + (path || '/'), r.status === 403 ? 'rate limited' : r.status); return null; }
     const j = await r.json();
     return Array.isArray(j) ? j : null;
@@ -990,12 +990,30 @@ async function probeByDate() {
   return [];
 }
 
-async function tryServerScan() {
+async function tryServerScan(isRescan) {
   if (!/^https?:$/.test(location.protocol)) return false;
   TRIED.length = 0;
-  let items = await fromManifests();
-  if (!items.length) items = await fromGitHubAPI();
-  if (!items.length) items = await fromDirectoryIndex();
+  APP.githubListed = false;
+
+  // Gather from every source and merge. A manifest that was not regenerated
+  // after a report was added must not be able to hide the newer file.
+  const seen = new Map();
+  const add = list => list.forEach(it => { if (!seen.has(it.name)) seen.set(it.name, it); });
+  add(await fromManifests());
+  add(await fromGitHubAPI());
+  if (!seen.size) add(await fromDirectoryIndex());
+
+  // A manifest can be out of date, and a plain static host lists nothing at all,
+  // so always ask directly for the last few days as well.
+  if (seen.size && !APP.githubListed) {
+    const dir = decodeURIComponent(Array.from(seen.values())[0].url.split('/').slice(0, -1).join('/'));
+    const recent = await probeDir(dir, 12);
+    const extra = recent.filter(n => !seen.has(n));
+    if (extra.length) note('recent dates in ' + dirLabel(dir), `${extra.length} newer than the manifest`);
+    extra.forEach(n => seen.set(n, { url: encPath(dir) + encodeURIComponent(n), name: n }));
+  }
+
+  let items = Array.from(seen.values());
   // if GitHub itself listed the repository and held no reports, probing cannot help
   if (!items.length && !APP.githubListed) {
     explainMiss(true);                    // say something now; the probe takes a while
@@ -1003,6 +1021,9 @@ async function tryServerScan() {
   }
   if (!items.length) { explainMiss(false); return false; }
   $('#diag').classList.add('hide');
+
+  // newest first, so the dashboard can open before the back catalogue arrives
+  items.sort((a, b) => (dateFromName(b.name) || '').localeCompare(dateFromName(a.name) || ''));
 
   const files = [];
   for (const it of items) {
@@ -1013,10 +1034,21 @@ async function tryServerScan() {
       files.push(new File([b], it.name, { lastModified: Date.parse(r.headers.get('last-modified') || '') || 0 }));
     } catch (e) {}
   }
-  if (!files.length) { explainMiss(); return false; }
+  if (!files.length) { explainMiss(false); return false; }
   $('#folderName').textContent = dirLabel(decodeURIComponent(items[0].url.split('/').slice(0, -1).join('/')));
+  $('#reloadBtn').classList.remove('hide');
   await ingestFiles(files);
   return true;
+}
+
+/** re-read the folder or the site without a page reload */
+async function rescan() {
+  if (APP.dirHandle) return scanFolder(APP.dirHandle);
+  $('#app').classList.add('hide');
+  $('#loader').classList.remove('hide');
+  $('#log').innerHTML = '';
+  APP.reports.clear(); APP.dates = []; APP.active = null;
+  if (!await tryServerScan(true)) { setProgText(''); }
 }
 
 /** tell the reader exactly what was looked for, so a wrong folder name is obvious */
@@ -1931,7 +1963,7 @@ function initUI() {
   $$('.tab').forEach(t => t.onclick = () => { APP.tab = t.dataset.tab; render(); });
   $('#pickBtn').onclick = pickFolder;
   $('#pickBtn2').onclick = pickFolder;
-  $('#reloadBtn').onclick = () => APP.dirHandle && scanFolder(APP.dirHandle);
+  $('#reloadBtn').onclick = rescan;
   $('#fileInput').onchange = e => ingestFiles(Array.from(e.target.files));
   $('#dirInput').onchange = e => ingestFiles(Array.from(e.target.files));
   $('#q').oninput = e => { APP.filters.q = e.target.value; render(); };
