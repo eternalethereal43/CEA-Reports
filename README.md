@@ -20,6 +20,8 @@ the workbooks are read on the reader's own machine.
    `main`, folder `/ (root)`. Your dashboard appears at
    `https://<user>.github.io/<repo>/`.
 
+The `.nojekyll` file is there so GitHub Pages publishes the folder as-is.
+
 Adding a report later is just a matter of dropping the file into
 `CEA Reports/` and pushing. The included GitHub Action rebuilds
 `CEA Reports/manifest.json`, which is how the page knows what is in the folder.
@@ -44,6 +46,23 @@ your-repo/
 GitHub Pages needs a paid plan to serve a private repository. If your data
 shouldn't be public, keep the repository private and open `index.html` straight
 from your own disk instead — see below.
+
+### If the site loads but shows no reports
+
+The page says so plainly and lists every location it tried — open
+**What it tried** on the message. The usual causes:
+
+- **The folder is named something else.** The page also checks `CEA-Reports`,
+  `Reports`, `reports` and `data`, and on GitHub it reads the repository listing,
+  so any folder in the repository works. A typo like `CEA  Reports` (two spaces)
+  will not.
+- **The files are not named by date.** They must be `DD-MM-YYYY.xlsx` or `.xls`.
+  A name like `26-08-2026 (1).xlsx` or `DailyCoalReport.xlsx` is skipped.
+- **Pages has not finished publishing.** Check the Actions tab; a push takes a
+  minute or two to appear.
+- **GitHub API rate limit.** The listing call is limited to 60 an hour per
+  address. Running `python tools/make_manifest.py` and committing the result
+  removes that call entirely.
 
 ## Running it without GitHub
 

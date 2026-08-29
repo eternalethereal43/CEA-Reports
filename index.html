@@ -199,8 +199,11 @@ svg.chart .thr{stroke:var(--crit);stroke-dasharray:3 3;stroke-width:1}
   <div class="stage">
     <div class="eyebrow">Central Electricity Authority · Fuel Management Division</div>
     <h2>Daily Coal Stock dashboard</h2>
-    <p>Point this page at the folder where you keep the daily reports. Files must be named by their report date —
-      <code>26-08-2026.xlsx</code>, <code>25-08-2026.xlsx</code>, and so on. Everything is read on your own machine; nothing is uploaded.</p>
+    <p>Reports are read from the <code>CEA Reports</code> folder beside this page, named by their report date —
+      <code>26-08-2026.xlsx</code>, <code>25-08-2026.xls</code>, and so on. Opening this file from your own disk instead?
+      Point it at the folder below. Everything is read on your own machine; nothing is uploaded.</p>
+
+    <div id="diag" class="warn hide" style="line-height:1.5"></div>
 
     <div id="resumeWrap" class="warn hide">
       Last time you used the folder <b id="resumeName"></b>. Browsers ask again after a restart.
@@ -232,10 +235,10 @@ svg.chart .thr{stroke:var(--crit);stroke-dasharray:3 3;stroke-width:1}
     <details style="margin-top:18px">
       <summary style="cursor:pointer;color:var(--muted);font-size:12.5px">Serving the folder from a web server instead</summary>
       <ol style="margin-top:8px">
-        <li>Put this file in the same folder as the reports.</li>
-        <li>Run <code>python -m http.server 8000</code> in that folder.</li>
-        <li>Open <code>http://localhost:8000/</code> — the reports load by themselves.</li>
-        <li>If the server hides its file listing, add a <code>manifest.json</code> holding a list of file names.</li>
+        <li>Put this file beside a folder named <code>CEA Reports</code> holding the workbooks.</li>
+        <li>Run <code>python -m http.server 8000</code> there, and open <code>http://localhost:8000/</code>.</li>
+        <li>On GitHub Pages the folder is listed through the repository API, so nothing else is needed.
+            Running <code>python tools/make_manifest.py</code> writes a <code>manifest.json</code> that removes even that call.</li>
       </ol>
     </details>
   </div>
@@ -712,6 +715,7 @@ const APP = {
   active: null,            // ISO date on screen
   tab: 'india',
   dirHandle: null,
+  githubListed: false,
   filters: {
     states: new Set(), sectors: new Set(), modes: new Set(), sections: new Set(['A','B','D']),
     gencos: new Set(), bands: new Set(), critOnly: false, coal: 'any',
@@ -724,6 +728,7 @@ const APP = {
 
 /* ---------- loading ---------- */
 const LOG = m => { const l = $('#log'); if (l) { l.appendChild(el('div', { text: m })); l.scrollTop = l.scrollHeight; } };
+const setProgText = t => { const n = $('#progTxt'); if (n) n.textContent = t; };
 const setProg = (n, t) => { $('#progBar').style.width = (t ? n / t * 100 : 0) + '%'; $('#progTxt').textContent = t ? `${n} / ${t} files` : ''; };
 
 function loadingChip(remaining) {
@@ -854,14 +859,20 @@ async function tryRememberedFolder() {
   return false;
 }
 /* ============================================================
-   Finding the reports when the page is served over http(s)
-   Order: manifest -> GitHub API -> directory listing -> date probe
+   Finding the reports when the page is served over http(s).
+   Tries, in order: a manifest, the GitHub contents API, a
+   directory listing, then asking for recent dates by name.
+   Every attempt is recorded so the loader can explain a miss.
    ============================================================ */
 
-/** Folder the reports live in, relative to this page. Change if you rename it. */
-const DATA_DIR = 'CEA Reports';
-const dirURL = () => DATA_DIR ? DATA_DIR.split('/').map(encodeURIComponent).join('/') + '/' : '';
-const fileURL = n => dirURL() + encodeURIComponent(n);
+/** Folders to look in, relative to this page. '' means beside the page itself. */
+const DATA_DIRS = ['CEA Reports', 'CEA-Reports', 'Reports', 'reports', 'data', ''];
+const DATA_DIR = DATA_DIRS[0];
+const encPath = d => d ? d.split('/').filter(Boolean).map(encodeURIComponent).join('/') + '/' : '';
+const isReport = n => /\.(xlsx|xlsm|xls)$/i.test(n) && !/^~\$/.test(n) && !!dateFromName(n);
+
+const TRIED = [];
+const note = (what, outcome) => TRIED.push(`${what} → ${outcome}`);
 
 /** owner/repo when this is running on GitHub Pages */
 function githubRepo() {
@@ -872,85 +883,148 @@ function githubRepo() {
   return { owner, repo: seg.length ? seg[0] : h };
 }
 
-async function fromManifest() {
-  for (const u of [dirURL() + 'manifest.json', 'manifest.json']) {
+async function fromManifests() {
+  for (const dir of DATA_DIRS) {
+    const u = encPath(dir) + 'manifest.json';
     try {
       const r = await fetch(u, { cache: 'no-store' });
-      if (!r.ok) continue;
+      if (!r.ok) { note(u, r.status); continue; }
       const j = await r.json();
-      const names = Array.isArray(j) ? j : (j.files || []);
-      if (names.length) return names.map(n => typeof n === 'string' ? n : n.name);
-    } catch (e) {}
+      const raw = Array.isArray(j) ? j : (j.files || []);
+      const out = raw.map(x => typeof x === 'string' ? x : x.name).filter(isReport)
+        .map(n => ({ url: encPath(dir) + encodeURIComponent(n), name: n }));
+      note(u, out.length ? `${out.length} report(s)` : 'no dated files listed');
+      if (out.length) return out;
+    } catch (e) { note(u, 'unreadable'); }
   }
   return [];
 }
 
-/** GitHub Pages serves no directory index, but the contents API lists the folder */
+/** GitHub Pages serves no directory index, but the contents API lists any folder */
 async function fromGitHubAPI() {
   const g = githubRepo();
   if (!g) return [];
-  const u = `https://api.github.com/repos/${g.owner}/${g.repo}/contents/${dirURL().replace(/\/$/, '')}`;
-  try {
-    const r = await fetch(u, { cache: 'no-store', headers: { Accept: 'application/vnd.github+json' } });
-    if (!r.ok) return [];
+  const base = `https://api.github.com/repos/${g.owner}/${g.repo}/contents/`;
+  const get = async path => {
+    const r = await fetch(base + path, { cache: 'no-store', headers: { Accept: 'application/vnd.github+json' } });
+    if (!r.ok) { note('GitHub API ' + (path || '/'), r.status === 403 ? 'rate limited' : r.status); return null; }
     const j = await r.json();
-    return Array.isArray(j) ? j.filter(x => x.type === 'file').map(x => x.name) : [];
-  } catch (e) { return []; }
+    return Array.isArray(j) ? j : null;
+  };
+  const root = await get('');
+  if (!root) return [];
+  APP.githubListed = true;
+
+  const out = [], seen = new Set();
+  const take = items => items.forEach(it => {
+    if (it.type === 'file' && isReport(it.name) && !seen.has(it.path)) {
+      seen.add(it.path);
+      out.push({ url: encPath(it.path.split('/').slice(0, -1).join('/')) + encodeURIComponent(it.name), name: it.name });
+    }
+  });
+  take(root);
+  const dirs = root.filter(it => it.type === 'dir' && !/^(\.|node_modules|tools|assets|docs)/i.test(it.name)).slice(0, 10);
+  for (const d of dirs) { const items = await get(encPath(d.path).replace(/\/$/, '')); if (items) take(items); }
+  note('GitHub API listing', out.length ? `${out.length} report(s)` : 'no dated workbooks in the repository');
+  return out;
 }
 
 async function fromDirectoryIndex() {
-  for (const u of [dirURL() || './', './']) {
+  for (const dir of DATA_DIRS) {
+    const u = encPath(dir) || './';
     try {
       const r = await fetch(u, { cache: 'no-store' });
-      if (!r.ok) continue;
+      if (!r.ok) { note('listing ' + u, r.status); continue; }
       const html = await r.text();
-      const names = Array.from(html.matchAll(/href="([^"]+\.xlsx?)"/gi)).map(m => decodeURIComponent(m[1]));
-      if (names.length) return names;
+      const out = Array.from(html.matchAll(/href="([^"]+\.xlsx?)"/gi))
+        .map(m => decodeURIComponent(m[1]).split('/').pop())
+        .filter(isReport)
+        .map(n => ({ url: encPath(dir) + encodeURIComponent(n), name: n }));
+      if (out.length) { note('listing ' + u, `${out.length} report(s)`); return out; }
     } catch (e) {}
   }
   return [];
 }
 
-/** last resort: ask for the last N daily file names directly */
-async function probeByDate(days) {
-  const found = [], today = new Date(), stems = [];
+/** last resort: ask for daily file names directly, since some servers list nothing */
+function dateStems(days) {
+  const out = [];
   for (let i = 0; i < days; i++) {
-    const d = new Date(today.getTime() - i * 864e5);
-    stems.push(`${String(d.getDate()).padStart(2, '0')}-${String(d.getMonth() + 1).padStart(2, '0')}-${d.getFullYear()}`);
+    const d = new Date(Date.now() - i * 864e5);
+    out.push(`${String(d.getDate()).padStart(2, '0')}-${String(d.getMonth() + 1).padStart(2, '0')}-${d.getFullYear()}`);
   }
-  const hit = n => fetch(fileURL(n), { method: 'HEAD', cache: 'no-store' }).then(r => r.ok ? n : null).catch(() => null);
-  for (let i = 0; i < stems.length; i += 12) {
-    const batch = stems.slice(i, i + 12);
-    const first = await Promise.all(batch.map(st => hit(st + '.xlsx')));
-    first.forEach(n => n && found.push(n));
-    // CEA also publishes the legacy .xls export, so check that for the dates that missed
-    const misses = batch.filter((st, k) => !first[k]);
+  return out;
+}
+async function probeDir(dir, days) {
+  const stems = dateStems(days), found = [];
+  const hit = n => fetch(encPath(dir) + encodeURIComponent(n), { method: 'HEAD', cache: 'no-store' })
+    .then(r => r.ok ? n : null).catch(() => null);
+  for (let i = 0; i < stems.length; i += 24) {
+    const batch = stems.slice(i, i + 24);
+    const a = await Promise.all(batch.map(st => hit(st + '.xlsx')));
+    a.forEach(n => n && found.push(n));
+    const misses = batch.filter((st, k) => !a[k]);
     if (misses.length) (await Promise.all(misses.map(st => hit(st + '.xls')))).forEach(n => n && found.push(n));
   }
   return found;
 }
+async function probeByDate() {
+  setProgText('Looking for report files…');
+  const pack = (dir, names) => names.map(n => ({ url: encPath(dir) + encodeURIComponent(n), name: n }));
+  // a quick sweep of the recent past tells us which folder the reports are in
+  for (const dir of DATA_DIRS) {
+    const quick = await probeDir(dir, 10);
+    if (!quick.length) continue;
+    note('name probe in ' + (dir || 'this folder'), 'found reports, reading the full history');
+    const all = await probeDir(dir, 400);
+    return pack(dir, all.length ? all : quick);
+  }
+  // nothing recent: look further back where the reports are meant to live
+  for (const dir of [DATA_DIRS[0], '']) {
+    const deep = await probeDir(dir, 60);
+    note('deep name probe in ' + (dir || 'this folder'), deep.length ? `${deep.length} report(s)` : 'nothing');
+    if (deep.length) return pack(dir, deep);
+  }
+  return [];
+}
 
 async function tryServerScan() {
   if (!/^https?:$/.test(location.protocol)) return false;
-  let names = await fromManifest();
-  if (!names.length) names = await fromGitHubAPI();
-  if (!names.length) names = await fromDirectoryIndex();
-  names = Array.from(new Set(names.map(n => n.split('/').pop()))).filter(n => dateFromName(n));
-  if (!names.length) names = await probeByDate(180);
-  if (!names.length) return false;
+  TRIED.length = 0;
+  let items = await fromManifests();
+  if (!items.length) items = await fromGitHubAPI();
+  if (!items.length) items = await fromDirectoryIndex();
+  // if GitHub itself listed the repository and held no reports, probing cannot help
+  if (!items.length && !APP.githubListed) items = await probeByDate();
+  if (!items.length) { explainMiss(); return false; }
 
   const files = [];
-  for (const n of names) {
+  for (const it of items) {
     try {
-      const r = await fetch(fileURL(n), { cache: 'no-store' });
+      const r = await fetch(it.url, { cache: 'no-store' });
       if (!r.ok) continue;
       const b = await r.blob();
-      files.push(new File([b], n, { lastModified: Date.parse(r.headers.get('last-modified') || '') || 0 }));
+      files.push(new File([b], it.name, { lastModified: Date.parse(r.headers.get('last-modified') || '') || 0 }));
     } catch (e) {}
   }
-  $('#folderName').textContent = DATA_DIR || 'this folder';
+  if (!files.length) { explainMiss(); return false; }
+  const dir = decodeURIComponent(items[0].url.split('/').slice(0, -1).join('/')) || 'this folder';
+  $('#folderName').textContent = dir;
   await ingestFiles(files);
   return true;
+}
+
+/** tell the reader exactly what was looked for, so a wrong folder name is obvious */
+function explainMiss() {
+  const box = $('#diag');
+  if (!box) return;
+  box.classList.remove('hide');
+  box.innerHTML = `<b>No reports found on this site.</b> The page looked for workbooks named by date
+    (<code>26-08-2026.xlsx</code>) in a folder called <code>CEA Reports</code> beside it, and in the
+    repository listing. Check the folder name and the file names, then reload — or use the buttons below
+    to open the files from your own machine.
+    <details style="margin-top:8px"><summary style="cursor:pointer">What it tried</summary>
+    <div class="log" style="max-height:190px">${TRIED.map(t => esc(t)).join('<br>')}</div></details>`;
 }
 
 /* ---------- saved settings ---------- */
