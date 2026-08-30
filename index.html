@@ -399,8 +399,28 @@ const num = (v, d) => {
   if (!isFinite(n)) return null;
   return round(isPct ? n / 100 : n, isPct ? 6 : d);
 };
-/** a share that may arrive as 0.73 or as 73 */
-const share = v => { const n = num(v, 6); return n == null ? null : (n > 1.5 ? round(n / 100, 6) : n); };
+/** A percentage cell. "191%" is unambiguous; a bare number might be a fraction
+    (0.37) or a percentage (37), so when a reference ratio is known, pick whichever
+    reading sits closer to it. Never assume: a plant really can hold 191% of
+    normative stock. */
+const pctCell = (v, ref) => {
+  if (v == null || v === '') return null;
+  if (typeof v === 'string' && v.includes('%')) return num(v, 6);   // num() already divides by 100
+  const n = num(v, 6);
+  if (n == null) return null;
+  if (n === 0) return 0;
+  if (ref != null && isFinite(ref) && ref > 0) {
+    const far = c => Math.abs(Math.log(c / ref));
+    return far(n) <= far(n / 100) ? n : round(n / 100, 6);
+  }
+  return n > 3 ? round(n / 100, 6) : n;
+};
+/** PLF never exceeds about 110%, so a bare number above that is a percentage */
+const plfCell = v => {
+  if (typeof v === 'string' && v.includes('%')) return num(v, 6);
+  const n = num(v, 6);
+  return n == null ? null : (n > 1.5 ? round(n / 100, 6) : n);
+};
 const fmt = (v, d = 1) => v == null || !isFinite(v) ? '—'
   : Number(v).toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d });
 const fmt0 = v => fmt(v, 0);
@@ -625,7 +645,7 @@ function parseWorkbook(wb, dateISO, fileName) {
         else if (!gRaw) gRaw = lastGenco;                 // merged cell, carry the last one down
         if (gRaw) lastGenco = gRaw;
         const genco = gRaw || '—';
-        const req = num(r[C.req], 4), tot = num(r[C.tot], 3);
+        const req = num(r[C.req], 4), tot = num(r[C.tot], 3), normTT = num(r[C.norm], 3);
         const modes = modeTokens(r[C.mode]);
         const p = {
           sl: Number(c0), state, genco, section,
@@ -633,10 +653,10 @@ function parseWorkbook(wb, dateISO, fileName) {
           modes,
           modeLabel: modes.map(m => ({ RAIL:'Rail', ROAD:'Road', PITHEAD:'Pithead', SEA:'Sea', OTHER:'Other' }[m])).join(' + '),
           name: cleanName(nameTxt),
-          cap, plf: share(r[C.plf]),
-          req, norm: num(r[C.norm], 3),
+          cap, plf: plfCell(r[C.plf]),
+          req, norm: normTT,
           dom: num(r[C.dom], 3), imp: num(r[C.imp], 3), stock: tot,
-          pctNorm: share(r[C.pctNorm]),
+          pctNorm: pctCell(r[C.pctNorm], (normTT > 0 && tot != null) ? tot / normTT : null),
           crit: /\*/.test(String(r[C.crit] == null ? '' : r[C.crit])),
           receipt: num(r[C.receipt], 3), cons: num(r[C.cons], 3),
           remarks: cleanName(r[C.remarks]),
@@ -1556,7 +1576,14 @@ const PCOLS = [
   { k: 'days',    t: 'Days of stock', n: 1, f: dayCell },
   { k: 'stock',   t: 'Total stock TT', n: 1, d: 1 },
   { k: 'req',     t: 'Daily req TT', n: 1, d: 1 },
-  { k: 'pctNorm', t: '% normative', n: 1, f: v => pct(v) },
+  { k: 'pctNorm', t: '% normative', n: 1, f: (v, p) => {
+      if (v == null) return '—';
+      const own = (p && p.norm > 0 && p.stock != null) ? p.stock / p.norm : null;
+      if (own == null || Math.abs(own - v) <= 0.02) return pct(v);
+      // CEA's published share leaves out part of the imported stock at some plants
+      return `<span title="As published by CEA: ${pct(v)}.&#10;Total stock ÷ normative stock: ${pct(own)}."
+        style="border-bottom:1px dotted var(--muted-2);cursor:help">${pct(v)}</span>`;
+    } },
   { k: 'state',   t: 'State' },
   { k: 'genco',   t: 'Genco' },
   { k: 'sector',  t: 'Sector' },
@@ -1597,7 +1624,7 @@ function renderPlants(root) {
     const tr = el('tr');
     PCOLS.forEach(c => {
       let v = p[c.k], h;
-      if (c.f) h = c.f(v);
+      if (c.f) h = c.f(v, p);
       else if (c.n) h = fmt(v, c.d == null ? 1 : c.d);
       else h = esc(v == null ? '' : v);
       if (c.k === 'name') h = `<span class="flag ${p.crit ? 'b-crit' : ''}" style="${p.crit ? '' : 'background:var(--rule)'}"></span>${esc(p.name)}${p.crit ? ' <span class="tag t-crit">CRITICAL</span>' : ''}`;

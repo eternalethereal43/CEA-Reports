@@ -117,6 +117,13 @@ print to PDF to circulate it.
   bands (under 4 days / 4–7 / 7–15 / 15 and over) are separate and yours to
   change — edit **Band thresholds** in the left panel and every chart, table,
   alert and the brief follow. The setting is remembered.
+- **% of normative** in the plant table is CEA's own published figure, shown as
+  it appears in the report — including values above 100%, which are normal at
+  plants sitting on a large imported stock. At a handful of plants CEA's figure
+  is lower than total stock ÷ normative stock, apparently because it leaves out
+  part of the imported stock; those cells are underlined, and hovering shows both
+  numbers. The summary rows and the all-India figure are computed as total stock
+  ÷ total normative stock for the group.
 - Plants on more than one mode (`RAIL-Sea-ROAD`) count under each mode, so
   mode-wise plant counts add to more than the total.
 - Category C (plants not in operation) is left out by default, because zero stock
