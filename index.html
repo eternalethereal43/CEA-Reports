@@ -621,6 +621,7 @@ function parseWorkbook(wb, dateISO, fileName) {
   /** walk the rows with one candidate column map; returns what it found */
   function walk(C) {
     const plants = [], totalsRows = {}, notes = [];
+    let grand = null;
     let section = 'A', lastState = '', lastGenco = '', pendingFrom = 0;
 
     for (let i = hdr + 1; i < rows.length; i++) {
@@ -630,7 +631,11 @@ function parseWorkbook(wb, dateISO, fileName) {
       const nameTxt = typeof cN === 'string' ? cN.trim() : (cN == null ? '' : String(cN));
 
       if (s0 && /report summary/i.test(s0)) break;
-      if (/grand total/i.test(nameTxt) || /grand total/i.test(s0)) break;
+      if (/grand total/i.test(nameTxt) || /grand total/i.test(s0)) {
+        // the report's own bottom line, kept so the parse can be checked against it
+        grand = { cap: num(r[C.cap], 2), req: num(r[C.req], 3), stock: num(r[C.tot], 3), crit: num(r[C.crit], 0) };
+        break;
+      }
       if (s0 && !/^\d+$/.test(s0)) { const sec = sectionFrom(s0); if (sec) section = sec; continue; }
 
       const cap = num(r[C.cap], 2);
@@ -679,13 +684,13 @@ function parseWorkbook(wb, dateISO, fileName) {
       }
       if (s0 && /^\s*\(?[ivx]+\)|^NOTE/i.test(s0)) notes.push(s0);
     }
-    return { plants, totalsRows, notes };
+    return { plants, totalsRows, notes, grand };
   }
 
   let C = detectCols(rows, hdr);
   let out = walk(C);
   if (!out.plants.length) { C = Object.assign({}, COLS_DEFAULT); out = walk(C); }  // fall back to the classic layout
-  const { plants, totalsRows, notes } = out;
+  const { plants, totalsRows, notes, grand } = out;
 
   plants.forEach(p => {
     if (p.sector) return;
@@ -699,9 +704,37 @@ function parseWorkbook(wb, dateISO, fileName) {
   return {
     date: dateISO, file: fileName, sheet,
     plants,
+    check: reconcile(plants, grand),
     reported: totalsRows['कुल योग/ GRAND TOTAL=A+B+C+D'] || totalsRows['GRAND TOTAL=A+B+C+D'] || null,
     notes
   };
+}
+
+/** Compare what was read against the report's own grand total and its serial
+    numbers, so a silently dropped row cannot go unnoticed. */
+function reconcile(plants, grand) {
+  const sl = new Set(plants.map(p => p.sl).filter(n => isFinite(n)));
+  const top = sl.size ? Math.max(...sl) : 0;
+  const gaps = [];
+  for (let i = 1; i <= top; i++) if (!sl.has(i)) gaps.push(i);
+
+  const c = { n: plants.length, expectedN: top, gaps, grand: grand || null, issues: [] };
+  if (gaps.length) c.issues.push(`${gaps.length} row(s) between Sl. No. 1 and ${top} were not read (${gaps.slice(0, 12).join(', ')}${gaps.length > 12 ? '…' : ''})`);
+  if (grand) {
+    const cmp = (label, read, said, tol) => {
+      if (said == null || !isFinite(said) || said === 0) return;
+      if (Math.abs(read - said) / Math.abs(said) > tol)
+        c.issues.push(`${label}: read ${fmt(read, 1)}, report says ${fmt(said, 1)}`);
+    };
+    cmp('Capacity (MW)', sum(plants, p => p.cap), grand.cap, 0.002);
+    cmp('Total stock (TT)', sum(plants, p => p.stock), grand.stock, 0.002);
+    if (grand.crit != null && isFinite(grand.crit) && grand.crit > 0) {
+      const read = plants.filter(p => p.crit).length;
+      if (read !== grand.crit) c.issues.push(`Critical plants: read ${read}, report says ${grand.crit}`);
+    }
+  }
+  c.ok = c.issues.length === 0;
+  return c;
 }
 
 /* aggregate any plant list into the headline numbers */
@@ -1411,6 +1444,14 @@ const dayCell = d => {
 /* ---------------- India position ---------------- */
 function renderIndia(root) {
   const rep = activeReport(), list = activePlants(), A = aggregate(list);
+
+  // if what was read disagrees with the report's own bottom line, say so loudly
+  const chk = rep.check;
+  if (chk && !chk.ok) {
+    root.appendChild(el('div', { class: 'warn', html:
+      `<b>This report did not read cleanly.</b> ${esc(rep.file)} —
+       <ul style="margin:6px 0 0;padding-left:18px">${chk.issues.map(i => `<li>${esc(i)}</li>`).join('')}</ul>` }));
+  }
   const i = APP.dates.indexOf(APP.active);
   const prevRep = i > 0 ? APP.reports.get(APP.dates[i - 1]) : null;
   const P = prevRep ? aggregate(applyFilters(prevRep.plants)) : null;
@@ -1421,6 +1462,8 @@ function renderIndia(root) {
       el('h2', { text: 'All-India position' }),
       el('span', { class: 'sub', text: `As on ${dLabel(rep.date)} · ${filterSummary()}` }),
       el('span', { class: 'sp' }),
+      el('span', { class: 'sub', title: chk && chk.grand ? `The report's own grand total: ${fmt(chk.grand.cap, 1)} MW, ${fmt(chk.grand.stock, 1)} TT` : '',
+        text: chk && chk.ok && chk.grand ? `${chk.n} plants — reconciles with the report's own total` : (chk ? `${chk.n} plants read` : '') }),
       el('span', { class: 'sub', text: prevRep ? `compared with ${dLabel(prevRep.date)}` : '' })
     ]),
     el('div', { class: 'kpis' }, [

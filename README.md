@@ -138,6 +138,22 @@ print to PDF to circulate it.
   owner blank for categories B, C and D, the name is filled in from any other
   loaded report.
 
+## Checking that a report read correctly
+
+Every report is reconciled against its own bottom line. The dashboard compares
+the plants it read with the serial numbers in the sheet and with the report's
+Grand Total row — capacity, total stock and the count of critical plants.
+
+- When it agrees, the All-India panel says so quietly:
+  *190 plants — reconciles with the report's own total*.
+- When it doesn't, a warning appears at the top naming the file and listing what
+  is off, including the serial numbers of any rows that were not read.
+
+So if a plant seems to be missing, check that line first. If it says the report
+reconciles, every row in the file was read, and the plant is being hidden by a
+filter rather than lost in parsing — clear the filters with **Reset all filters**,
+and check the report date in the top bar.
+
 ## Notes
 
 - The newest report is parsed first so the dashboard opens straight away; older
